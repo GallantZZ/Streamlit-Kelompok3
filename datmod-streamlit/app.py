@@ -575,7 +575,7 @@ def read_dataset(uploaded_file) -> tuple[pd.DataFrame | None, str | None]:
     if uploaded_file is not None:
         return read_table_bytes(uploaded_file.getvalue(), uploaded_file.name), uploaded_file.name
 
-    default_paths = [
+    default_file_names = [
         "DatasetProjectDatmod.csv",
         "DatasetProjectDatmod.xlsx",
         "dataset.csv",
@@ -583,15 +583,27 @@ def read_dataset(uploaded_file) -> tuple[pd.DataFrame | None, str | None]:
         "df2_clean.csv",
         "df2_clean.xls",
         "df2_clean.xlsx",
-        os.path.join("data", "DatasetProjectDatmod.csv"),
-        os.path.join("data", "DatasetProjectDatmod.xlsx"),
-        os.path.join("data", "dataset.csv"),
-        os.path.join("data", "dataset.xlsx"),
-        os.path.join("data", "df2_clean.csv"),
-        os.path.join("data", "df2_clean.xls"),
-        os.path.join("data", "df2_clean.xlsx"),
     ]
-    for path in default_paths:
+
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    working_dir = os.getcwd()
+    search_dirs = [
+        app_dir,
+        working_dir,
+        os.path.join(app_dir, "data"),
+        os.path.join(working_dir, "data"),
+        os.path.join(working_dir, "datmod-streamlit"),
+        os.path.join(working_dir, "datmod-streamlit", "data"),
+    ]
+
+    checked_paths = []
+    for folder in search_dirs:
+        for file_name in default_file_names:
+            path = os.path.join(folder, file_name)
+            if path not in checked_paths:
+                checked_paths.append(path)
+
+    for path in checked_paths:
         if os.path.exists(path):
             return read_table_path(path), path
 
