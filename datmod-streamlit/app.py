@@ -24,7 +24,15 @@ RANDOM_STATE = 42
 SAMPLE_SIZE = 50_000
 TARGET = "engagement"
 MODEL_FEATURES = ["stories", "reels_watched", "ads_clicked", "posts", "followers"]
-DEFAULT_SOURCE_NAMES = {"DatasetProjectDatmod.csv", "dataset.csv", "df2_clean.csv", "df2_clean.xls"}
+DEFAULT_SOURCE_NAMES = {
+    "DatasetProjectDatmod.csv",
+    "DatasetProjectDatmod.xlsx",
+    "dataset.csv",
+    "dataset.xlsx",
+    "df2_clean.csv",
+    "df2_clean.xls",
+    "df2_clean.xlsx",
+}
 
 LOG_MAPPING = {
     "daily_active_minutes_instagram": "active_minutes_log",
@@ -524,28 +532,68 @@ def soft_note(text: str) -> None:
 
 
 @st.cache_data(show_spinner=False)
-def read_csv_path(path: str) -> pd.DataFrame:
-    return pd.read_csv(path)
+def read_table_path(path: str) -> pd.DataFrame:
+    with open(path, "rb") as file:
+        return read_table_bytes(file.read(), path)
 
 
 @st.cache_data(show_spinner=False)
-def read_csv_bytes(data: bytes) -> pd.DataFrame:
-    return pd.read_csv(io.BytesIO(data))
+def read_table_bytes(data: bytes, source_name: str) -> pd.DataFrame:
+    source_ext = os.path.splitext(source_name)[1].lower()
+    is_excel_binary = data.startswith(b"\xd0\xcf\x11\xe0") or data.startswith(b"PK\x03\x04")
+
+    if is_excel_binary:
+        try:
+            return pd.read_excel(io.BytesIO(data), sheet_name=0)
+        except Exception as exc:
+            raise ValueError(
+                "File Excel gagal dibaca. Pastikan file tidak corrupt dan dependencies deploy sudah terinstall."
+            ) from exc
+
+    if source_ext in {".csv", ".xls", ".xlsx"}:
+        for encoding in ("utf-8", "utf-8-sig", "latin1"):
+            try:
+                return pd.read_csv(io.BytesIO(data), encoding=encoding)
+            except UnicodeDecodeError:
+                continue
+            except Exception:
+                if source_ext == ".csv":
+                    raise
+                break
+
+    try:
+        return pd.read_excel(io.BytesIO(data), sheet_name=0)
+    except Exception as exc:
+        raise ValueError("Dataset harus berupa CSV, XLS, atau XLSX yang valid.") from exc
+
+
+def is_default_source_name(source_name: str | None) -> bool:
+    return bool(source_name) and os.path.basename(source_name) in DEFAULT_SOURCE_NAMES
 
 
 def read_dataset(uploaded_file) -> tuple[pd.DataFrame | None, str | None]:
     if uploaded_file is not None:
-        return read_csv_bytes(uploaded_file.getvalue()), uploaded_file.name
+        return read_table_bytes(uploaded_file.getvalue(), uploaded_file.name), uploaded_file.name
 
     default_paths = [
         "DatasetProjectDatmod.csv",
+        "DatasetProjectDatmod.xlsx",
         "dataset.csv",
+        "dataset.xlsx",
         "df2_clean.csv",
         "df2_clean.xls",
+        "df2_clean.xlsx",
+        os.path.join("data", "DatasetProjectDatmod.csv"),
+        os.path.join("data", "DatasetProjectDatmod.xlsx"),
+        os.path.join("data", "dataset.csv"),
+        os.path.join("data", "dataset.xlsx"),
+        os.path.join("data", "df2_clean.csv"),
+        os.path.join("data", "df2_clean.xls"),
+        os.path.join("data", "df2_clean.xlsx"),
     ]
     for path in default_paths:
         if os.path.exists(path):
-            return read_csv_path(path), path
+            return read_table_path(path), path
 
     return None, None
 
@@ -752,7 +800,7 @@ def describe_model_readiness(df: pd.DataFrame, source_name: str | None) -> tuple
     missing = validate_model_data(df)
     if missing:
         return "Model belum siap", "Kolom model yang belum ada: " + ", ".join(missing) + "."
-    if source_name in DEFAULT_SOURCE_NAMES:
+    if is_default_source_name(source_name):
         return "Model siap dipakai", "Dataset bawaan memiliki semua fitur model dan hasil evaluasi CatBoost tersedia sebagai acuan."
     return (
         "Dataset upload terdeteksi",
@@ -952,8 +1000,8 @@ def render_overview(df: pd.DataFrame, df_full: pd.DataFrame, meta: dict) -> None
     with c4:
         metric_card(
             model_title,
-            best["Model"] if source_name in DEFAULT_SOURCE_NAMES else "Lengkap",
-            f"R2 {best['R2']:.2f}, RMSE {best['RMSE']:.2f}" if source_name in DEFAULT_SOURCE_NAMES else "Evaluasi ulang untuk dataset upload",
+            best["Model"] if is_default_source_name(source_name) else "Lengkap",
+            f"R2 {best['R2']:.2f}, RMSE {best['RMSE']:.2f}" if is_default_source_name(source_name) else "Evaluasi ulang untuk dataset upload",
         )
 
     st.write("")
@@ -1159,7 +1207,7 @@ def render_model_evidence(df: pd.DataFrame, source_name: str | None) -> None:
         "Model menggunakan stories, reels_watched, ads_clicked, posts, dan followers untuk memprediksi engagement.",
     )
 
-    is_default_source = source_name in DEFAULT_SOURCE_NAMES
+    is_default_source = is_default_source_name(source_name)
     missing = validate_model_data(df)
     usable_rows = (
         len(df[MODEL_FEATURES + [TARGET]].replace([np.inf, -np.inf], np.nan).dropna())
@@ -1452,16 +1500,22 @@ st.sidebar.caption("Dashboard visual untuk dataset ini.")
 
 with st.sidebar.expander("Dataset source", expanded=False):
     st.caption(
-        "Upload hanya dipakai kalau ingin mengganti dataset default. Jika tidak ada file yang diupload, dashboard otomatis memakai file CSV yang ada di folder project."
+        "Upload dipakai kalau dataset default belum ikut deploy atau ingin mengganti data. Dashboard menerima CSV, XLS, dan XLSX."
     )
-    uploaded_file = st.file_uploader("Replace dataset", type=["csv"])
-raw_df, source_name = read_dataset(uploaded_file)
+    uploaded_file = st.file_uploader("Replace dataset", type=["csv", "xls", "xlsx"])
+
+try:
+    raw_df, source_name = read_dataset(uploaded_file)
+except Exception as exc:
+    st.error(f"Dataset gagal dibaca: {exc}")
+    st.stop()
+
 st.session_state["source_name"] = source_name
 
 if raw_df is None:
     st.title("Instagram Engagement Modeling")
     soft_note(
-        "Dataset belum ditemukan. Upload file CSV, atau letakkan DatasetProjectDatmod.csv / df2_clean.csv / df2_clean.xls di folder yang sama dengan app.py."
+        "Dataset default belum ditemukan di server deploy. Upload file CSV/XLS/XLSX lewat sidebar, atau pastikan df2_clean.csv / df2_clean.xls / df2_clean.xlsx ikut masuk ke repository deploy."
     )
     st.stop()
 

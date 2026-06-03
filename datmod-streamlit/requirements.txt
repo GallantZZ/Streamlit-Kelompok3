@@ -7,3 +7,5 @@ statsmodels
 xgboost
 lightgbm
 catboost
+openpyxl
+xlrd
